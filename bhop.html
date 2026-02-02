@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bhop Parkour 3D</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            z-index: 100;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            z-index: 50;
+        }
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: white;
+        }
+        #crosshair::before {
+            top: 50%;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            transform: translateY(-50%);
+        }
+        #crosshair::after {
+            left: 50%;
+            top: 0;
+            width: 2px;
+            height: 100%;
+            transform: translateX(-50%);
+        }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(0,0,0,0.8);
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 200;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        <h2>BHOP PARKOUR 3D</h2>
+        <p><strong>Controles:</strong></p>
+        <p>WASD - Movimiento</p>
+        <p>ESPACIO - Saltar (mantén presionado para bhop)</p>
+        <p>SHIFT - Agacharse</p>
+        <p>R - Reiniciar al spawn</p>
+        <p>Mouse - Mirar</p>
+        <p><br>Haz clic para comenzar</p>
+    </div>
+    <div id="info">
+        <div>Velocidad: <span id="speed">0</span> u/s</div>
+        <div>Altura: <span id="height">0</span> m</div>
+        <div>Saltos consecutivos: <span id="jumps">0</span></div>
+    </div>
+    <div id="crosshair"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, clock;
+        let player = {
+            velocity: new THREE.Vector3(),
+            canJump: false,
+            height: 1.8,
+            crouchHeight: 0.9,
+            isCrouching: false,
+            jumpCount: 0
+        };
+        let keys = {};
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let prevTime = performance.now();
+        let raycaster = new THREE.Raycaster();
+        let platforms = [];
+        let pitch = 0, yaw = 0;
+        
+        const GRAVITY = 20;
+        const JUMP_FORCE = 8;
+        const MOVE_SPEED = 7;
+        const AIR_ACCEL = 0.7;
+        const GROUND_ACCEL = 10;
+        const FRICTION = 6;
+        const MAX_SPEED = 30;
+        const BHOP_MULTIPLIER = 1.015;
+        const SPAWN_POINT = { x: 0, y: 2, z: 0 };
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB);
+            scene.fog = new THREE.Fog(0x87CEEB, 0, 300);
+
+            camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, player.height, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Luces
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(50, 100, 50);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.left = -100;
+            dirLight.shadow.camera.right = 100;
+            dirLight.shadow.camera.top = 100;
+            dirLight.shadow.camera.bottom = -100;
+            scene.add(dirLight);
+
+            // Generar parkour
+            generateParkour();
+
+            clock = new THREE.Clock();
+
+            document.addEventListener('click', () => {
+                document.body.requestPointerLock();
+                document.getElementById('instructions').style.display = 'none';
+            });
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function generateParkour() {
+            const materials = [
+                new THREE.MeshStandardMaterial({ color: 0x2ecc71 }),
+                new THREE.MeshStandardMaterial({ color: 0x3498db }),
+                new THREE.MeshStandardMaterial({ color: 0xe74c3c }),
+                new THREE.MeshStandardMaterial({ color: 0xf39c12 })
+            ];
+
+            // Plataforma inicial
+            createPlatform(0, 0, 0, 20, 1, 20, 0x95a5a6);
+
+            let x = 0, z = 0, y = 0;
+            
+            for (let i = 0; i < 50; i++) {
+                const dist = THREE.MathUtils.randFloat(4, 8);
+                const angle = THREE.MathUtils.randFloat(-Math.PI/3, Math.PI/3);
+                const heightChange = THREE.MathUtils.randFloat(-2, 3);
+                
+                x += Math.sin(angle) * dist;
+                z -= Math.cos(angle) * dist;
+                y += heightChange;
+                
+                const width = THREE.MathUtils.randFloat(3, 8);
+                const depth = THREE.MathUtils.randFloat(3, 8);
+                const height = THREE.MathUtils.randFloat(0.5, 2);
+                
+                const mat = materials[Math.floor(Math.random() * materials.length)];
+                createPlatform(x, y, z, width, height, depth, mat.color.getHex());
+                
+                // Ocasionalmente agregar obstáculos
+                if (Math.random() > 0.7) {
+                    const obstHeight = THREE.MathUtils.randFloat(2, 5);
+                    createPlatform(
+                        x + THREE.MathUtils.randFloat(-2, 2),
+                        y + height/2 + obstHeight/2,
+                        z + THREE.MathUtils.randFloat(-2, 2),
+                        1, obstHeight, 1, 0x34495e
+                    );
+                }
+            }
+
+            // Suelo lejano
+            const groundGeo = new THREE.PlaneGeometry(500, 500);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x27ae60 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -10;
+            ground.receiveShadow = true;
+            scene.add(ground);
+        }
+
+        function createPlatform(x, y, z, w, h, d, color) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mat = new THREE.MeshStandardMaterial({ color: color });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+            platforms.push(mesh);
+        }
+
+        function onKeyDown(e) {
+            keys[e.code] = true;
+            if (e.code === 'KeyW') moveForward = true;
+            if (e.code === 'KeyS') moveBackward = true;
+            if (e.code === 'KeyA') moveLeft = true;
+            if (e.code === 'KeyD') moveRight = true;
+            if (e.code === 'ShiftLeft') player.isCrouching = true;
+            if (e.code === 'KeyR') respawnPlayer();
+        }
+
+        function onKeyUp(e) {
+            keys[e.code] = false;
+            if (e.code === 'KeyW') moveForward = false;
+            if (e.code === 'KeyS') moveBackward = false;
+            if (e.code === 'KeyA') moveLeft = false;
+            if (e.code === 'KeyD') moveRight = false;
+            if (e.code === 'ShiftLeft') player.isCrouching = false;
+        }
+
+        function onMouseMove(e) {
+            if (document.pointerLockElement === document.body) {
+                yaw -= e.movementX * 0.002;
+                pitch -= e.movementY * 0.002;
+                pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+            }
+        }
+
+        function respawnPlayer() {
+            camera.position.set(SPAWN_POINT.x, SPAWN_POINT.y, SPAWN_POINT.z);
+            player.velocity.set(0, 0, 0);
+            player.canJump = false;
+            player.jumpCount = 0;
+            pitch = 0;
+            yaw = 0;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function checkCollision() {
+            raycaster.set(camera.position, new THREE.Vector3(0, -1, 0));
+            const intersects = raycaster.intersectObjects(platforms);
+            
+            const targetHeight = player.isCrouching ? player.crouchHeight : player.height;
+            
+            if (intersects.length > 0) {
+                const distance = intersects[0].distance;
+                if (distance < targetHeight && player.velocity.y <= 0) {
+                    camera.position.y = intersects[0].point.y + targetHeight;
+                    player.velocity.y = 0;
+                    player.canJump = true;
+                    return true;
+                }
+            }
+            player.canJump = false;
+            return false;
+        }
+
+        function updateMovement(delta) {
+            const onGround = checkCollision();
+            
+            // Aplicar gravedad
+            if (!onGround) {
+                player.velocity.y -= GRAVITY * delta;
+            }
+
+            // Bhop jump
+            if (keys['Space'] && player.canJump) {
+                player.velocity.y = JUMP_FORCE;
+                player.canJump = false;
+                player.jumpCount++;
+                
+                // Bhop speed boost
+                const horizontalSpeed = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+                if (horizontalSpeed > 0) {
+                    const boost = Math.min(BHOP_MULTIPLIER, MAX_SPEED / horizontalSpeed);
+                    player.velocity.x *= boost;
+                    player.velocity.z *= boost;
+                }
+            } else if (!keys['Space']) {
+                player.jumpCount = 0;
+            }
+
+            // Movimiento relativo a la cámara
+            const forward = new THREE.Vector3();
+            const right = new THREE.Vector3();
+            
+            camera.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+            
+            right.crossVectors(forward, new THREE.Vector3(0, 1, 0));
+            right.normalize();
+
+            const wishDir = new THREE.Vector3();
+            if (moveForward) wishDir.add(forward);
+            if (moveBackward) wishDir.sub(forward);
+            if (moveLeft) wishDir.sub(right);
+            if (moveRight) wishDir.add(right);
+            
+            if (wishDir.length() > 0) {
+                wishDir.normalize();
+                
+                const accel = onGround ? GROUND_ACCEL : AIR_ACCEL;
+                const currentSpeed = player.velocity.dot(wishDir);
+                const addSpeed = MOVE_SPEED - currentSpeed;
+                
+                if (addSpeed > 0) {
+                    let accelSpeed = accel * delta * MOVE_SPEED;
+                    accelSpeed = Math.min(accelSpeed, addSpeed);
+                    
+                    player.velocity.x += wishDir.x * accelSpeed;
+                    player.velocity.z += wishDir.z * accelSpeed;
+                }
+            }
+
+            // Fricción en el suelo
+            if (onGround && !keys['Space']) {
+                const speed = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+                if (speed > 0) {
+                    const drop = speed * FRICTION * delta;
+                    const newSpeed = Math.max(speed - drop, 0);
+                    const scale = newSpeed / speed;
+                    player.velocity.x *= scale;
+                    player.velocity.z *= scale;
+                }
+            }
+
+            // Limitar velocidad máxima
+            const hSpeed = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+            if (hSpeed > MAX_SPEED) {
+                const scale = MAX_SPEED / hSpeed;
+                player.velocity.x *= scale;
+                player.velocity.z *= scale;
+            }
+
+            // Aplicar velocidad
+            camera.position.x += player.velocity.x * delta;
+            camera.position.y += player.velocity.y * delta;
+            camera.position.z += player.velocity.z * delta;
+
+            // Actualizar rotación
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = yaw;
+            camera.rotation.x = pitch;
+
+            // HUD
+            const speed = Math.sqrt(player.velocity.x ** 2 + player.velocity.z ** 2);
+            document.getElementById('speed').textContent = Math.round(speed * 10);
+            document.getElementById('height').textContent = Math.round(camera.position.y * 10) / 10;
+            document.getElementById('jumps').textContent = player.jumpCount;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+            prevTime = time;
+
+            updateMovement(delta);
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
